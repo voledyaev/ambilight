@@ -1,0 +1,29 @@
+[project]
+name = "ambilight"
+version = "0.0.1"
+description = "Low-latency cross-platform sync software for ROBOBLOQ QuikLight USB LED strips"
+requires-python = ">=3.11"
+dependencies = [
+    "hidapi>=0.14.0",
+    "mss>=9.0.1",
+    "numpy>=1.26",
+    "pillow>=12.2.0",
+    "pyobjc-framework-coremedia>=12.1",
+    "pyobjc-framework-libdispatch>=12.1",
+    "pyobjc-framework-quartz>=12.1",
+    "pyobjc-framework-screencapturekit>=12.1",
+    "pyusb>=1.3.1",
+]
+
+[project.optional-dependencies]
+diag = ["pyusb>=1.2.1"]
+
+[project.scripts]
+ambilight = "ambilight.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ambilight"]

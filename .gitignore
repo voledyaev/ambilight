@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# uv
+.uv/
+
+# IDEs / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Claude Code project state (user-specific, not for the repo)
+.claude/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Third-party reference code (xsiravia/win_ambilight, kept locally for research,
+# not redistributed; see README for link to the original)
+reference/
