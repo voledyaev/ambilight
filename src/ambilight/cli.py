@@ -37,6 +37,7 @@ from ambilight.capture import (
 )
 from ambilight.device import AmbilightDevice
 from ambilight.geometry import NUM_LEDS
+from ambilight.idle import should_strip_be_off, supported as idle_supported
 from ambilight.smooth import Smoother
 
 
@@ -65,6 +66,12 @@ def run(args: argparse.Namespace) -> int:
     )
     target_dt = 1.0 / args.fps
 
+    idle_timeout = args.idle_timeout
+    idle_enabled = idle_timeout > 0 and idle_supported()
+    if idle_timeout > 0 and not idle_supported():
+        print("  --idle-timeout requested but no idle provider on this platform; "
+              "feature disabled.")
+
     print(
         f"Backend: {type(capture.backend).__name__}\n"
         f"Display: {capture.screen_w}×{capture.screen_h} "
@@ -73,6 +80,8 @@ def run(args: argparse.Namespace) -> int:
         f"smoothing: {args.smooth:.2f} s, "
         f"snap @ {args.snap * 100:.0f}%, "
         f"target {args.fps:.0f} FPS"
+        + (f"\nIdle off: {idle_timeout:.0f}s (macOS) / display-state (Windows)"
+           if idle_enabled else "")
     )
 
     with AmbilightDevice(
@@ -84,11 +93,25 @@ def run(args: argparse.Namespace) -> int:
         frames_in_window = 0
         cap_ms = 0.0
         send_ms = 0.0
+        is_idle_off = False
         try:
             while True:
                 t0 = time.monotonic()
                 dt = t0 - last
                 last = t0
+
+                if idle_enabled:
+                    if should_strip_be_off(idle_timeout):
+                        if not is_idle_off:
+                            dev.send_solid((0, 0, 0))
+                            is_idle_off = True
+                            print("  display idle — strip off", flush=True)
+                        time.sleep(1.0)
+                        last = time.monotonic()
+                        continue
+                    if is_idle_off:
+                        is_idle_off = False
+                        print("  display active — strip back on", flush=True)
 
                 target = capture.grab_colors()
                 t1 = time.monotonic()
@@ -175,6 +198,13 @@ def main(argv: list[str] | None = None) -> int:
              "values pack more LEDs into fewer entries → fewer USB chunks per "
              "frame → higher effective FPS, at the cost of slightly less colour "
              "gradient fidelity.",
+    )
+    p.add_argument(
+        "--idle-timeout", type=float, default=120.0,
+        help="Turn the strip off after this many seconds with no keyboard / "
+             "mouse input (default 120). The OS dims the display on idle but "
+             "doesn't blank the framebuffer, so without this the strip stays "
+             "lit. Set to 0 to disable. Linux: unsupported, flag is a no-op.",
     )
     p.add_argument(
         "--dedup-tolerance", type=int, default=1,
