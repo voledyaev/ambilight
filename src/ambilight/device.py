@@ -10,6 +10,7 @@ import time
 
 import hid
 
+from ambilight.geometry import NUM_LEDS
 from ambilight.protocol import CHUNK_GAP_S, build_section_chunks
 
 VENDOR_ID = 0x1A86
@@ -44,6 +45,20 @@ class AmbilightDevice:
         if self._opened:
             self._dev.close()
             self._opened = False
+
+    def _reopen(self) -> None:
+        """Tear down and re-establish the HID connection.
+
+        Used to recover from a transient USB failure (device slept,
+        re-enumerated, momentary bus hiccup) without killing the loop.
+        """
+        try:
+            self._dev.close()
+        except Exception:
+            pass
+        self._opened = False
+        self._dev = hid.device()
+        self.open()
 
     def __enter__(self) -> "AmbilightDevice":
         self.open()
@@ -82,11 +97,31 @@ class AmbilightDevice:
         if self._last_colors is not None and self._is_within_tolerance(colors):
             self.frames_skipped += 1
             return
-        self._last_colors = list(colors)
 
-        chunks, self._set_id = build_section_chunks(
+        chunks, next_set_id = build_section_chunks(
             colors, self._set_id, rle_tolerance=self._rle_tolerance,
         )
+        try:
+            self._write_chunks(chunks)
+        except (OSError, ValueError, AmbilightDeviceError) as exc:
+            # Transient USB failure (device slept / re-enumerated / bus
+            # hiccup). Reconnect once and retry the same frame; only give
+            # up if the second attempt also fails.
+            try:
+                self._reopen()
+            except Exception as reopen_exc:
+                raise AmbilightDeviceError(
+                    f"USB write failed and reconnect failed: {reopen_exc}"
+                ) from exc
+            self._write_chunks(chunks)
+
+        # Only commit state after the frame is actually on the wire, so a
+        # failed/partial send doesn't make the next frame wrongly dedup-skip.
+        self._set_id = next_set_id
+        self._last_colors = list(colors)
+        self.frames_sent += 1
+
+    def _write_chunks(self, chunks) -> None:
         for i, pkt in enumerate(chunks):
             written = self._dev.write(b"\x00" + pkt)
             if written < 0:
@@ -95,7 +130,6 @@ class AmbilightDevice:
                 )
             if i < len(chunks) - 1:
                 time.sleep(CHUNK_GAP_S)
-        self.frames_sent += 1
 
     def _is_within_tolerance(self, colors) -> bool:
         tol = self._dedup_tolerance
@@ -109,6 +143,6 @@ class AmbilightDevice:
                 return False
         return True
 
-    def send_solid(self, color, n_leds: int = 65) -> None:
+    def send_solid(self, color, n_leds: int = NUM_LEDS) -> None:
         """Convenience: paint every LED a single colour."""
         self.send_leds([color] * n_leds)

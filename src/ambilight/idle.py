@@ -156,6 +156,24 @@ def _start_win32_display_watcher() -> None:
         user32.RegisterPowerSettingNotification.argtypes = [
             wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD,
         ]
+        # Pointer/handle-returning calls MUST declare restype, or ctypes
+        # assumes c_int (32-bit) and truncates the value on 64-bit Windows —
+        # a truncated HMODULE/HWND silently breaks RegisterClassW /
+        # CreateWindowExW and the whole watcher dies quietly.
+        kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+        kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+        user32.RegisterClassW.restype = wintypes.ATOM
+        user32.RegisterClassW.argtypes = [ctypes.c_void_p]
+        user32.CreateWindowExW.restype = wintypes.HWND
+        user32.CreateWindowExW.argtypes = [
+            wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID,
+        ]
+        user32.GetMessageW.restype = wintypes.BOOL
+        user32.GetMessageW.argtypes = [
+            ctypes.c_void_p, wintypes.HWND, wintypes.UINT, wintypes.UINT,
+        ]
 
         def wnd_proc(hwnd, msg, wparam, lparam):
             global _win32_display_on
@@ -234,4 +252,9 @@ def should_strip_be_off(idle_timeout_s: float) -> bool | None:
 
 
 def supported() -> bool:
-    return sys.platform in ("darwin", "win32")
+    # On macOS the feature only works if the Quartz input-idle provider
+    # actually loaded; otherwise report unsupported so the caller doesn't
+    # print a misleading "Idle off" banner for a no-op.
+    if sys.platform == "darwin":
+        return _get_idle_seconds is not None
+    return sys.platform == "win32"

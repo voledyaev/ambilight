@@ -31,6 +31,34 @@ run will trigger the system dialog). Restart the command after granting.
 
 The strip immediately starts following your screen. `Ctrl+C` to stop.
 
+## One-click launch (no terminal)
+
+To start the app without opening a terminal and typing `uv run ambilight`,
+use the bundled launchers in the repo root:
+
+| File | Platform | How to run |
+|---|---|---|
+| `start-windows.bat` | Windows | double-click in Explorer |
+| `start-macos.command` | macOS | double-click in Finder |
+
+Both `cd` into the project, locate `uv` (including its non-default install
+homes — Finder launches with a minimal `PATH`), run `uv run ambilight`
+(which auto-syncs dependencies on first run), and leave the window open
+afterwards so you can read logs or errors. If `uv` isn't installed they
+print a link to the installer instead of failing silently.
+
+Notes:
+
+- **Pin your own flags** by editing the launcher: replace `uv run ambilight`
+  with e.g. `uv run ambilight --monitor 2 --fps 15`.
+- **Windows desktop/startup shortcut**: right-click `start-windows.bat` →
+  *Create shortcut*, drop it on the desktop, or into `shell:startup`
+  (`Win+R`) to run at login.
+- **macOS first run**: Gatekeeper may warn about an unidentified developer —
+  right-click `start-macos.command` → *Open* once to allow it. Screen
+  Recording permission must be granted to **Terminal** (the launcher runs
+  through it).
+
 ## CLI options
 
 ```
@@ -112,7 +140,12 @@ Modules:
   detection. macOS uses **ScreenCaptureKit** via pyobjc (stable, sees
   hardware-decoded video, no WindowServer stalls). Windows/Linux fall
   back to `mss` automatically. Per-LED averaging happens on a
-  downsampled frame for speed.
+  downsampled frame for speed. The `mss` backend self-heals from
+  transient `BitBlt` failures (fullscreen mode switches, display
+  sleep/lock, resolution changes, DRM content) by rebuilding its GDI
+  handles and retrying — falling back to the last good frame rather than
+  crashing — and the sample geometry recomputes itself if the resolution
+  changes mid-run.
 - `ambilight.geometry` — the strip's physical layout: 17 LEDs right,
   31 top, 17 left, starting from bottom-right corner CCW.
 - `ambilight.smooth` — exponential moving average with a snap-threshold
@@ -122,7 +155,9 @@ Modules:
   run-length merging.
 - `ambilight.device` — HID transport with frame deduplication. Splits
   oversize frames into multiple 64-byte HID reports with a 20 ms gap
-  (matching OEM cadence).
+  (matching OEM cadence). Recovers from a transient USB write failure by
+  reconnecting once and retrying the frame; per-frame state is committed
+  only after the write lands so a failed send can't desync the dedup.
 - `ambilight.cli` — argparse main loop. Hides the Python Dock icon via
   `NSApplicationActivationPolicyProhibited` so it runs as a pure
   background utility.

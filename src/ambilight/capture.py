@@ -70,19 +70,61 @@ class CaptureBackend(ABC):
 
 
 class MSSBackend(CaptureBackend):
+    """Screen capture via mss (Windows GDI / Linux X11).
+
+    On Windows, mss caches GDI handles (device context + bitmap) sized to
+    the display state at construction time. `BitBlt` then fails — raising
+    `ScreenShotError` — whenever that state shifts underneath those handles:
+    a fullscreen game/video switching display mode, the screen sleeping or
+    locking, a resolution/DPI change, or DRM/HDCP-protected content. Most of
+    these are transient, so we recover by recreating the mss instance (which
+    rebuilds the handles) and retrying. If even the retry fails, we hand back
+    the last good frame rather than crashing the whole loop.
+    """
+
     def __init__(self, monitor_index: int = 1) -> None:
         import mss  # local import so non-mss platforms don't pay the cost
-        self._sct = mss.mss()
-        mon = self._sct.monitors[monitor_index]
+        self._mss = mss
+        self._monitor_index = monitor_index
+        self._last: np.ndarray | None = None
+        self._open()
+
+    def _open(self) -> None:
+        self._sct = self._mss.mss()
+        mon = self._sct.monitors[self._monitor_index]
         self._monitor = mon
         self.screen_w = mon["width"]
         self.screen_h = mon["height"]
 
-    def grab(self) -> np.ndarray:
+    def _reopen(self) -> None:
+        try:
+            self._sct.close()
+        except Exception:
+            pass
+        self._open()
+
+    def _raw_grab(self) -> np.ndarray:
         raw = self._sct.grab(self._monitor)
         return np.frombuffer(raw.raw, dtype=np.uint8).reshape(
             self.screen_h, self.screen_w, 4
         )
+
+    def grab(self) -> np.ndarray:
+        from mss.exception import ScreenShotError
+        try:
+            frame = self._raw_grab()
+        except ScreenShotError:
+            # Display state likely changed under our cached GDI handles.
+            # Rebuild them and try once more.
+            self._reopen()
+            try:
+                frame = self._raw_grab()
+            except ScreenShotError:
+                if self._last is not None:
+                    return self._last  # protected content / mid-modeswitch
+                raise
+        self._last = frame
+        return frame
 
     def close(self) -> None:
         self._sct.close()
@@ -445,6 +487,16 @@ class ScreenCapture:
     def __post_init__(self) -> None:
         if self.backend is None:
             self.backend = default_backend(self.config)
+        self._setup_geometry()
+
+    def _setup_geometry(self) -> None:
+        """(Re)compute per-LED sample geometry from the backend's current
+        frame size. Called once at init, and again whenever the backend's
+        reported resolution changes mid-run (e.g. mss rebuilt its handles
+        after a display mode switch), so the regions don't stay anchored to
+        a stale resolution."""
+        self._backend_w = self.backend.screen_w
+        self._backend_h = self.backend.screen_h
         self.screen_w = self.backend.screen_w
         # Drop the top N rows up-front so downstream geometry stays
         # consistent. With SCK on macOS this hides the menu bar (and
@@ -452,6 +504,7 @@ class ScreenCapture:
         self._top_crop = max(0, self.config.skip_top_px)
         self.screen_h = max(1, self.backend.screen_h - self._top_crop)
         self._stride = _stride_for(self.screen_w)
+        self._bbox_small = None  # stale in the new resolution's coords
         self.regions: list[Rect] = [
             _region_for_led(
                 i, 0, 0, self.screen_w, self.screen_h, self.config.depth_fraction
@@ -461,6 +514,9 @@ class ScreenCapture:
 
     def grab_colors(self) -> np.ndarray:
         full = self.backend.grab()  # (H, W, 4) BGRA
+        if (self.backend.screen_w != self._backend_w
+                or self.backend.screen_h != self._backend_h):
+            self._setup_geometry()
         if self._top_crop > 0:
             full = full[self._top_crop :, :, :]
         s = self._stride
